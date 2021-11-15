@@ -26,9 +26,13 @@ cd RAAN
 Then follow the setup of CenterPoint: [INSTALL](https://github.com/anonymous0522/RAAN/blob/master/docs/INSTALL.md)
 
 2. Data Preperation
-Currently, we train and evaluate our method on NuScenes dataset. Please setup the dataset by [NUSC](https://github.com/anonymous0522/RAAN/blob/master/docs/NUSC.md) from CenterPoint.
+
+Currently, we train and evaluate our method on NuScenes dataset. 
+
+Please setup the dataset by [NUSC](https://github.com/anonymous0522/RAAN/blob/master/docs/NUSC.md) from CenterPoint.
 
 3. Examples of Training and Evaluation
+
 Distributed Train:
 ~~~
 python -m torch.distributed.launch —nproc_per_node=NUM_OF_GPU tools/train.py PATH_TO_CONFIG —work_dir PATH_TO_WORK_DIR
