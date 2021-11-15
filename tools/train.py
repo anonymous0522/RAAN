@@ -2,7 +2,7 @@ import argparse
 import json
 import os
 import sys
-
+import pdb
 from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning, NumbaWarning
 import warnings
 warnings.simplefilter('ignore', category=NumbaDeprecationWarning)
@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("config", help="train config file path")
     parser.add_argument("--work_dir", help="the dir to save logs and models")
     parser.add_argument("--resume_from", help="the checkpoint file to resume from")
+    parser.add_argument("--load_from", help="the checkpoint file to finetune")
     parser.add_argument(
         "--validate",
         action="store_true",
@@ -39,7 +40,7 @@ def parse_args():
         default=1,
         help="number of gpus to use " "(only applicable to non-distributed training)",
     )
-    parser.add_argument("--seed", type=int, default=None, help="random seed")
+    parser.add_argument("--seed", type=int, default=0, help="random seed")
     parser.add_argument(
         "--launcher",
         choices=["none", "pytorch", "slurm", "mpi"],
@@ -60,27 +61,20 @@ def parse_args():
 
 
 def main():
-
-    # torch.manual_seed(0)
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
-    # np.random.seed(0)
-
     args = parse_args()
-
     cfg = Config.fromfile(args.config)
     cfg.local_rank = args.local_rank
-
     # update configs according to CLI args
     if args.work_dir is not None:
         cfg.work_dir = args.work_dir
-    if args.resume_from is not None:
+    if args.resume_from is not None and args.resume_from != 'None':
         cfg.resume_from = args.resume_from
+    if args.load_from is not None and args.load_from != 'None':
+        cfg.load_from = args.load_from
 
     distributed = False
     if "WORLD_SIZE" in os.environ:
         distributed = int(os.environ["WORLD_SIZE"]) > 1
-
     if distributed:
         torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
@@ -94,6 +88,7 @@ def main():
     logger = get_root_logger(cfg.log_level)
     logger.info("Distributed training: {}".format(distributed))
     logger.info(f"torch.backends.cudnn.benchmark: {torch.backends.cudnn.benchmark}")
+    logger.info("use distributed {}".format(distributed))
 
     if args.local_rank == 0:
         # copy important files to backup
@@ -103,14 +98,17 @@ def main():
         # logger.info(f"Backup source files to {cfg.work_dir}/det3d")
 
     # set random seeds
-    if args.seed is not None:
+    if (args.seed is not None) and (not cfg.tv_merge):
         logger.info("Set random seed to {}".format(args.seed))
         set_random_seed(args.seed)
 
     model = build_detector(cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
 
-    datasets = [build_dataset(cfg.data.train)]
-
+    if cfg.tv_merge:
+        datasets = [build_dataset(cfg.data.tv_train)]
+        logger.info("Merge Dataset train and val")
+    else:
+        datasets = [build_dataset(cfg.data.train)]
     if len(cfg.workflow) == 2:
         datasets.append(build_dataset(cfg.data.val))
 

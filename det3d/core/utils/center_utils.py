@@ -13,10 +13,12 @@ import numpy as np
 import torch
 from torch import nn
 from .circle_nms_jit import circle_nms
+import pdb
+import scipy
 
-def gaussian_radius(det_size, min_overlap=0.5):
+
+def gaussian_radius(det_size, min_overlap=0.5): # min overlap = 0.1
     height, width = det_size
-
     a1  = 1
     b1  = (height + width)
     c1  = width * height * (1 - min_overlap) / (1 + min_overlap)
@@ -36,6 +38,10 @@ def gaussian_radius(det_size, min_overlap=0.5):
     r3  = (b3 + sq3) / 2
     return min(r1, r2, r3)
 
+def gaussian_radius2D(det_size):
+    l, w = det_size
+    return {"half_height": w // 2, "half_width": l // 2}
+
 def gaussian2D(shape, sigma=1):
     m, n = [(ss - 1.) / 2. for ss in shape]
     y, x = np.ogrid[-m:m+1,-n:n+1]
@@ -44,15 +50,56 @@ def gaussian2D(shape, sigma=1):
     h[h < np.finfo(h.dtype).eps * h.max()] = 0
     return h
 
+def gaussian2D_rotate(shape, rotate, sigma=(1, 1)):
+    m, n = [(ss - 1) // 2 for ss in shape]
+    y, x = np.ogrid[-m:m+1,-n:n+1]
+    h = np.exp(-(x * x) / \
+               (2 * sigma[0] * sigma[0]) + -(y * y) / \
+               (2 * sigma[1] * sigma[1]))
+    pad_max = np.ceil(np.sqrt((m + 1) ** 2 + (n + 1) ** 2)).astype(np.int)
+    h_pad = np.pad(h,
+                   ((pad_max - m - 1, pad_max - m - 1),
+                    (pad_max - n - 1, pad_max - n - 1)),
+                   'constant', constant_values=(0, 0))
+    h_pad_rotate = scipy.ndimage.rotate(
+        h_pad, angle=rotate/np.pi*180, reshape=False)
+    np.clip(h_pad_rotate, 0.0, 1.0, out=h_pad_rotate)
+    h_pad_rotate[
+        h_pad_rotate < np.finfo(h_pad_rotate.dtype).eps *
+        h_pad_rotate.max()] = 0
+    return h_pad_rotate, pad_max - 1
 
-def draw_umich_gaussian(heatmap, center, radius, k=1):
-    diameter = 2 * radius + 1
-    gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6)
+def draw_umich_gaussian2D(heatmap, center, radius, rotate=0.0, sigma_decay=3.0, k=1):
+    assert isinstance(radius, dict)
+    radius = np.array([radius["half_height"], radius["half_width"]])
+    diameter = 2 * radius + 1 # make sure odd val.
+    gaussian, radius_max = gaussian2D_rotate(
+        (diameter[1], diameter[0]), rotate, sigma=diameter / sigma_decay)
 
     x, y = int(center[0]), int(center[1])
 
     height, width = heatmap.shape[0:2]
 
+    left, right = min(x, radius_max), min(width - x, radius_max + 1)
+    top, bottom = min(y, radius_max), min(height - y, radius_max + 1)
+
+    masked_heatmap  = heatmap[y - top:y + bottom, x - left:x + right]
+    masked_gaussian = gaussian[
+        radius_max - top:radius_max + bottom,
+        radius_max - left:radius_max + right]
+    if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
+        np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+    return heatmap
+
+def draw_umich_gaussian(heatmap, center, radius, rotate=0.0, k=1):
+    diameter = 2 * radius + 1
+    # crop rect valid shape.
+    gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6)
+
+    x, y = int(center[0]), int(center[1])
+
+    height, width = heatmap.shape[0:2]
+    # from center extend dist to left, to right, to top, to bottom.
     left, right = min(x, radius), min(width - x, radius + 1)
     top, bottom = min(y, radius), min(height - y, radius + 1)
 
@@ -63,10 +110,14 @@ def draw_umich_gaussian(heatmap, center, radius, k=1):
     return heatmap
 
 def _gather_feat(feat, ind, mask=None):
+    # feat: N * (w * h) * 8(reg) / 1(hm)
     dim  = feat.size(2)
     ind  = ind.unsqueeze(2).expand(ind.size(0), ind.size(1), dim)
+    # because of ind has lots of zeros because total 500 bboxes, but valid ones are gt num
+    # after gather, feat will be fill by heatmap / reg vals from gt center in feature map
+    # other parts will auto fill by ind 0's val.
     feat = feat.gather(1, ind)
-    if mask is not None:
+    if mask is not None: # is None
         mask = mask.unsqueeze(2).expand_as(feat)
         feat = feat[mask]
         feat = feat.view(-1, dim)

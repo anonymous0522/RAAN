@@ -5,9 +5,11 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-
+import matplotlib.pyplot as plt
 import torch
 from det3d import torchie
+import pdb
+from torch.utils.tensorboard import SummaryWriter
 
 from . import hooks
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -36,13 +38,14 @@ def example_to_device(example, device, non_blocking=False) -> dict:
     float_names = ["voxels", "bev_map"]
     for k, v in example.items():
         if k in ["anchors", "anchors_mask", "reg_targets", "reg_weights", "labels", "hm",
-                "anno_box", "ind", "mask", 'cat', 'points']:
+                "anno_box", "ind", "mask", 'cat', "num_points_per_gt"]:
             example_torch[k] = [res.to(device, non_blocking=non_blocking) for res in v]
         elif k in [
             "voxels",
             "bev_map",
             "coordinates",
             "num_points",
+            "points",
             "num_voxels",
             "cyv_voxels",
             "cyv_num_voxels",
@@ -153,7 +156,7 @@ class Trainer(object):
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-
+        self.writer = SummaryWriter(work_dir + '/tensorboard/')
         self.batch_processor = batch_processor
 
         # Create work_dir
@@ -396,7 +399,6 @@ class Trainer(object):
             if self.lr_scheduler is not None:
                 #print(global_step)
                 self.lr_scheduler.step(global_step)
-
             self._inner_iter = i
 
             self.call_hook("before_train_iter")
@@ -408,19 +410,19 @@ class Trainer(object):
             outputs = self.batch_processor_inline(
                 self.model, data_batch, train_mode=True, **kwargs
             )
-
             if not isinstance(outputs, dict):
                 raise TypeError("batch_processor() must return a dict")
             if "log_vars" in outputs:
                 self.log_buffer.update(outputs["log_vars"], outputs["num_samples"])
             self.outputs = outputs
+            # TODO(Xuetao): verify for distributed training.
+            self.update_tensorboard(global_step, is_train=True)
             self.call_hook("after_train_iter")
             self._iter += 1
-
         self.call_hook("after_train_epoch")
         self._epoch += 1
 
-    def val(self, data_loader, **kwargs):
+    def val(self, data_loader, epoch, **kwargs):
         self.model.eval()
         self.mode = "val"
         self.data_loader = data_loader
@@ -475,7 +477,7 @@ class Trainer(object):
         self.logger.info("\n")
         for k, v in result_dict["results"].items():
             self.logger.info(f"Evaluation {k}: {v}")
-
+        self.update_tensorboard(epoch, is_train=False, ret_dict=result_dict["detail"])
         self.call_hook("after_val_epoch")
 
     def resume(self, checkpoint, resume_optimizer=True, map_location="default"):
@@ -513,7 +515,6 @@ class Trainer(object):
         )
         self.logger.info("workflow: %s, max: %d epochs", workflow, max_epochs)
         self.call_hook("before_run")
-
         while self.epoch < max_epochs:
             for i, flow in enumerate(workflow):
                 mode, epochs = flow
@@ -532,17 +533,57 @@ class Trainer(object):
                         "mode in workflow must be a str or "
                         "callable function not '{}'".format(type(mode))
                     )
-
                 for _ in range(epochs):
                     if mode == "train" and self.epoch >= max_epochs:
                         return
                     elif mode == "val":
-                        epoch_runner(data_loaders[i], **kwargs)
+                        epoch_runner(data_loaders[i], self.epoch, **kwargs)
                     else:
                         epoch_runner(data_loaders[i], self.epoch, **kwargs)
-
         # time.sleep(1)
         self.call_hook("after_run")
+
+    def update_tensorboard(self, global_step, is_train=True, ret_dict=None):
+        if self.rank == 0:
+            if is_train:
+                self.writer.add_scalar(
+                    'lr', self.current_lr()[0], global_step)
+                self.writer.add_scalar(
+                    'loss', self.outputs['loss'].detach().cpu().numpy(), global_step)
+            else:
+                mean_APs = {}
+                for key in ret_dict['eval.nusc'].keys():
+                    mean_APs[key] = sum(ret_dict['eval.nusc'][key].values())
+                    mean_APs[key] /= len(ret_dict['eval.nusc'][key])
+
+                    self.writer.add_scalar(key + ' AP', mean_APs[key], global_step)
+
+                mean_ap = sum(mean_APs.values()) / len(mean_APs)
+                self.writer.add_scalar('MeanAP', mean_ap, global_step)
+                '''
+                # add tensorboard image for attention and heatmap.
+                if self._world_size > 1:
+                    model = self.model.module
+                else: model = self.model
+                if hasattr(model.bbox_head.tasks[0], 'hm_attention'):
+                    hm_attention_a, hm_attention_b = model.bbox_head.tasks[0].hm_attention
+                    # heatmap = model.bbox_head.tasks[0].heatmap
+                    img_attention_a = hm_attention_a[0][0].detach().cpu().numpy() * 255
+                    img_attention_b = hm_attention_b[0][0].detach().cpu().numpy() * 255
+
+                    # img_heatmap = heatmap[0][0].detach().cpu().numpy() * 255
+                    fig1 = plt.figure()
+                    ax1 = fig1.add_subplot(1, 1, 1)
+                    ax1.imshow(img_attention_a, cmap=plt.cm.gray)
+                    fig2 = plt.figure()
+                    ax2 = fig2.add_subplot(1, 1, 1)
+                    ax2.imshow(img_attention_b, cmap=plt.cm.gray)
+                    #fig2 = plt.figure()
+                    #ax2 = fig2.add_subplot(1, 1, 1)
+                    #ax2.imshow(img_heatmap, cmap=plt.cm.gray)
+                    self.writer.add_figure("attention_a", fig1, global_step)
+                    self.writer.add_figure("attention_b", fig2, global_step)
+                '''
 
     def register_lr_hooks(self, lr_config):
         if isinstance(lr_config, LrUpdaterHook):

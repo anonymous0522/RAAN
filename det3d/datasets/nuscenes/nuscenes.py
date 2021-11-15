@@ -4,6 +4,7 @@ import json
 import random
 import operator
 import numpy as np
+import pdb
 
 from functools import reduce
 from pathlib import Path
@@ -36,7 +37,7 @@ class NuScenesDataset(PointCloudDataset):
         root_path,
         nsweeps=0, # here set to zero to catch unset nsweep
         cfg=None,
-        pipeline=None,
+        pipeline=None, # all configs
         class_names=None,
         test_mode=False,
         version="v1.0-trainval",
@@ -45,23 +46,21 @@ class NuScenesDataset(PointCloudDataset):
         super(NuScenesDataset, self).__init__(
             root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names
         )
-
         self.nsweeps = nsweeps
         assert self.nsweeps > 0, "At least input one sweep please!"
         print(self.nsweeps)
 
         self._info_path = info_path
         self._class_names = class_names
-
         if not hasattr(self, "_nusc_infos"):
             self.load_infos(self._info_path)
 
         self._num_point_features = NuScenesDataset.NumPointFeatures
-        self._name_mapping = general_to_detection
-
-        self.virtual = kwargs.get('virtual', False)
-        if self.virtual:
-            self._num_point_features = 16 
+        self._name_mapping = general_to_detection # merge like child / audit to ped
+        
+        self.painted = kwargs.get('painted', False)
+        if self.painted:
+            self._num_point_features += 10 
 
         self.version = version
         self.eval_version = "detection_cvpr_2019"
@@ -73,8 +72,15 @@ class NuScenesDataset(PointCloudDataset):
 
     def load_infos(self, info_path):
 
-        with open(self._info_path, "rb") as f:
-            _nusc_infos_all = pickle.load(f)
+        if isinstance(self._info_path, list):
+            _nusc_infos_all = []
+            for i in range(len(self._info_path)):
+                with open(self._info_path[i], "rb") as f:
+                    _nusc_infos_all = _nusc_infos_all + pickle.load(f)
+                f.close()
+        else:
+            with open(self._info_path, "rb") as f:
+                _nusc_infos_all = pickle.load(f)
 
         if not self.test_mode:  # if training
             self.frac = int(len(_nusc_infos_all) * 0.25)
@@ -93,20 +99,24 @@ class NuScenesDataset(PointCloudDataset):
             frac = 1.0 / len(self._class_names)
             ratios = [frac / v for v in _cls_dist.values()]
 
-            for cls_infos, ratio in zip(list(_cls_infos.values()), ratios):
-                self._nusc_infos += np.random.choice(
-                    cls_infos, int(len(cls_infos) * ratio)
-                ).tolist()
+            if len(self._class_names) == 1:
+                for cls_infos, ratio in zip(list(_cls_infos.values()), ratios):
+                    self._nusc_infos += cls_infos
+            else:
+                for cls_infos, ratio in zip(list(_cls_infos.values()), ratios):
+                    self._nusc_infos += np.random.choice(
+                        cls_infos, int(len(cls_infos) * ratio)
+                    ).tolist()
 
-            _cls_infos = {name: [] for name in self._class_names}
-            for info in self._nusc_infos:
-                for name in set(info["gt_names"]):
-                    if name in self._class_names:
-                        _cls_infos[name].append(info)
+                _cls_infos = {name: [] for name in self._class_names}
+                for info in self._nusc_infos:
+                    for name in set(info["gt_names"]):
+                        if name in self._class_names:
+                            _cls_infos[name].append(info)
 
-            _cls_dist = {
-                k: len(v) / len(self._nusc_infos) for k, v in _cls_infos.items()
-            }
+                _cls_dist = {
+                    k: len(v) / len(self._nusc_infos) for k, v in _cls_infos.items()
+                }
         else:
             if isinstance(_nusc_infos_all, dict):
                 self._nusc_infos = []
@@ -119,7 +129,7 @@ class NuScenesDataset(PointCloudDataset):
 
         if not hasattr(self, "_nusc_infos"):
             self.load_infos(self._info_path)
-
+        # print("len is ===== ", len(self._nusc_infos))
         return len(self._nusc_infos)
 
     @property
@@ -175,11 +185,10 @@ class NuScenesDataset(PointCloudDataset):
             "calib": None,
             "cam": {},
             "mode": "val" if self.test_mode else "train",
-            "virtual": self.virtual 
+            "painted": self.painted 
         }
-
         data, _ = self.pipeline(res, info)
-
+        # pickle.dump(data, open("/home/xhao/Perception/CenterPoint/test_data_draw/test1.pkl", "wb"))
         return data
 
     def __getitem__(self, idx):

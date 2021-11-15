@@ -5,7 +5,7 @@ from ..registry import DETECTORS
 from .base import BaseDetector
 from ..utils.finetune_utils import FrozenBatchNorm2d
 from det3d.torchie.trainer import load_checkpoint
-
+import pdb
 
 @DETECTORS.register_module
 class SingleStageDetector(BaseDetector):
@@ -32,7 +32,7 @@ class SingleStageDetector(BaseDetector):
 
     def init_weights(self, pretrained=None):
         if pretrained is None:
-            return 
+            return
         try:
             load_checkpoint(self, pretrained, strict=False)
             print("init weight from {}".format(pretrained))

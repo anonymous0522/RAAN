@@ -6,6 +6,7 @@ import numpy as np
 from det3d.core import box_np_ops
 from det3d.datasets.dataset_factory import get_dataset
 from tqdm import tqdm
+import pdb
 
 dataset_name_map = {
     "NUSC": "NuScenesDataset",
@@ -21,7 +22,6 @@ def create_groundtruth_database(
     db_path=None,
     dbinfo_path=None,
     relative_path=True,
-    virtual=False,
     **kwargs,
 ):
     pipeline = [
@@ -39,7 +39,6 @@ def create_groundtruth_database(
             pipeline=pipeline,
             test_mode=True,
             nsweeps=kwargs["nsweeps"],
-            virtual=virtual
         )
         nsweeps = dataset.nsweeps
     else:
@@ -52,15 +51,16 @@ def create_groundtruth_database(
 
     if dataset_class_name in ["WAYMO", "NUSC"]: 
         if db_path is None:
-            if virtual:
-                db_path = root_path / f"gt_database_{nsweeps}sweeps_withvelo_virtual"
-            else:
-                db_path = root_path / f"gt_database_{nsweeps}sweeps_withvelo"
+            db_path = root_path / f"gt_database_{nsweeps}sweeps_withvelo"
         if dbinfo_path is None:
-            if virtual:
-                dbinfo_path = root_path / f"dbinfos_train_{nsweeps}sweeps_withvelo_virtual.pkl"
-            else:
-                dbinfo_path = root_path / f"dbinfos_train_{nsweeps}sweeps_withvelo.pkl"
+            dbinfo_path = root_path / f"dbinfos_train_{nsweeps}sweeps_withvelo.pkl"
+    else:
+        raise NotImplementedError()
+
+    if dataset_class_name == "NUSC":
+        point_features = 5
+    elif dataset_class_name == "WAYMO":
+        point_features = 5 if nsweeps == 1 else 6 
     else:
         raise NotImplementedError()
 
@@ -102,6 +102,7 @@ def create_groundtruth_database(
                 names = names[mask]
                 gt_boxes = gt_boxes[mask]
 
+
         group_dict = {}
         group_ids = np.full([gt_boxes.shape[0]], -1, dtype=np.int64)
         if "group_ids" in annos:
@@ -127,7 +128,7 @@ def create_groundtruth_database(
                 gt_points[:, :3] -= gt_boxes[i, :3]
                 with open(filepath, "w") as f:
                     try:
-                        gt_points.tofile(f)
+                        gt_points[:, :point_features].tofile(f)
                     except:
                         print("process {} files".format(index))
                         break

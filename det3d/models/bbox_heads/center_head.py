@@ -9,9 +9,9 @@ import logging
 from collections import defaultdict
 from det3d.core import box_torch_ops
 import torch
-from det3d.torchie.cnn import kaiming_init
+from det3d.torchie.cnn import kaiming_init, normal_init
 from torch import double, nn
-from det3d.models.losses.centernet_loss import FastFocalLoss, RegLoss
+from det3d.models.losses.centernet_loss import FastFocalLoss, RegLoss, FocalLoss
 from det3d.models.utils import Sequential
 from ..registry import HEADS
 import copy 
@@ -19,8 +19,12 @@ try:
     from det3d.ops.dcn import DeformConv
 except:
     print("Deformable Convolution not built!")
+# attention_conv2d
+from biattention_conv2d_concat_initW import AttentionConv2D
 
 from det3d.core.utils.circle_nms_jit import circle_nms
+import pdb
+
 
 class FeatureAdaption(nn.Module):
     """Feature Adaption Module.
@@ -71,43 +75,70 @@ class SepHead(nn.Module):
         final_kernel=1,
         bn=False,
         init_bias=-2.19,
+        attention_flag=False,
         **kwargs,
     ):
         super(SepHead, self).__init__(**kwargs)
-
-        self.heads = heads 
+        self.heads = heads
+        self._heatmap = None
         for head in self.heads:
             classes, num_conv = self.heads[head]
 
             fc = Sequential()
-            for i in range(num_conv-1):
-                fc.add(nn.Conv2d(in_channels, head_conv,
-                    kernel_size=final_kernel, stride=1, 
-                    padding=final_kernel // 2, bias=True))
-                if bn:
-                    fc.add(nn.BatchNorm2d(head_conv))
-                fc.add(nn.ReLU())
+            if attention_flag:
+                for i in range(num_conv-1):
+                    fc.add(AttentionConv2D(in_channels, head_conv,
+                                     kernel_size=final_kernel, stride=1,
+                                     padding=final_kernel // 2, bias=True,
+                                     is_header=True, last_attention=True))
+            else:
+                for i in range(num_conv-1):
+                    fc.add(nn.Conv2d(in_channels, head_conv,
+                                     kernel_size=final_kernel, stride=1,
+                                     padding=final_kernel // 2, bias=True))
+            if bn and (not attention_flag):
+                fc.add(nn.BatchNorm2d(head_conv))
+            fc.add(nn.ReLU())
 
             fc.add(nn.Conv2d(head_conv, classes,
-                    kernel_size=final_kernel, stride=1, 
-                    padding=final_kernel // 2, bias=True))    
+                    kernel_size=final_kernel, stride=1,
+                    padding=final_kernel // 2, bias=True))
 
+            # init weight.
+            '''
+            elif 'occlusion' in head:
+                normal_init(fc[-1], std=0.01)
+            '''
             if 'hm' in head:
                 fc[-1].bias.data.fill_(init_bias)
             else:
                 for m in fc.modules():
                     if isinstance(m, nn.Conv2d):
                         kaiming_init(m)
+                # init attention weight.
+                for m in fc.modules():
+                    if isinstance(m, AttentionConv2D):
+                        m.init_attention_weight()
 
+            # setattr() is used to assign the object attribute its value
+            # object (self), name (head / 'reg' like key), value (fc)
             self.__setattr__(head, fc)
-        
 
     def forward(self, x):
-        ret_dict = dict()        
+        ret_dict = dict()
         for head in self.heads:
             ret_dict[head] = self.__getattr__(head)(x)
-
+        # self._heatmap = ret_dict['hm']
         return ret_dict
+
+    @property
+    def hm_attention(self):
+        return self.__getattr__('hm')[0].att_map
+
+    @property
+    def heatmap(self):
+        return torch.clamp(
+            self._heatmap.sigmoid_(), min=1e-4, max=1-1e-4)
 
 class DCNSepHead(nn.Module):
     def __init__(
@@ -153,7 +184,7 @@ class DCNSepHead(nn.Module):
         self.task_head = SepHead(in_channels, heads, head_conv=head_conv, bn=bn, final_kernel=final_kernel)
 
 
-    def forward(self, x):    
+    def forward(self, x):
         center_feat = self.feature_adapt_cls(x)
         reg_feat = self.feature_adapt_reg(x)
 
@@ -179,52 +210,81 @@ class CenterHead(nn.Module):
         share_conv_channel=64,
         num_hm_conv=2,
         dcn_head=False,
+        attention_flag=False,
+        occlusion_level=3,
+        weight_occlusion=0.75,
     ):
         super(CenterHead, self).__init__()
-
+        
         num_classes = [len(t["class_names"]) for t in tasks]
         self.class_names = [t["class_names"] for t in tasks]
         self.code_weights = code_weights 
         self.weight = weight  # weight between hm loss and loc loss
         self.dataset = dataset
+        self.weight_occlusion = weight_occlusion
 
         self.in_channels = in_channels
         self.num_classes = num_classes
 
         self.crit = FastFocalLoss()
+        self.crit_cls = FocalLoss(occlusion_level)
         self.crit_reg = RegLoss()
-
-        self.box_n_dim = 9 if 'vel' in common_heads else 7  
+        # self.box_n_dim = 9 if 'vel' in common_heads else 7
         self.use_direction_classifier = False 
-
+        self.occlusion_level = occlusion_level
+        self.use_occluded = (self.occlusion_level >= 2)
         if not logger:
             logger = logging.getLogger("CenterHead")
         self.logger = logger
-
         logger.info(
             f"num_classes: {num_classes}"
         )
 
-        # a shared convolution 
-        self.shared_conv = nn.Sequential(
-            nn.Conv2d(in_channels, share_conv_channel,
-            kernel_size=3, padding=1, bias=True),
-            nn.BatchNorm2d(share_conv_channel),
-            nn.ReLU(inplace=True)
+        logger.info(
+            f"use_occluded: {self.use_occluded}"
         )
+
+        # a shared convolution
+        if attention_flag:
+            logger.info(
+                f"header attention: {AttentionConv2D}")
+            self.shared_conv = nn.Sequential(
+                AttentionConv2D(in_channels, share_conv_channel,
+                kernel_size=3, padding=1, bias=True, is_header=True),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            self.shared_conv = nn.Sequential(
+                nn.Conv2d(in_channels, share_conv_channel,
+                          kernel_size=3, padding=1, bias=True),
+                nn.BatchNorm2d(share_conv_channel),
+                nn.ReLU(inplace=True)
+            )
 
         self.tasks = nn.ModuleList()
         print("Use HM Bias: ", init_bias)
 
         if dcn_head:
             print("Use Deformable Convolution in the CenterHead!")
+        # {'reg': (2, 2), 
+        #  'height': (1, 2), 
+        #  'dim': (3, 2), 
+        #  'rot': (2, 2), 
+        #  'vel': (2, 2)} common_heads
 
+        # 'hm' number of class is changable, so it does not belong to common.
+        # num_classes [1, 2, 2, 1, 2, 2]
         for num_cls in num_classes:
             heads = copy.deepcopy(common_heads)
             if not dcn_head:
                 heads.update(dict(hm=(num_cls, num_hm_conv)))
+                if self.use_occluded:
+                    heads.update(dict(occlusion=(occlusion_level, num_hm_conv)))
                 self.tasks.append(
-                    SepHead(share_conv_channel, heads, bn=True, init_bias=init_bias, final_kernel=3)
+                    SepHead(
+                        share_conv_channel, heads, bn=True,
+                        init_bias=init_bias, final_kernel=3,
+                        attention_flag=attention_flag)
                 )
             else:
                 self.tasks.append(
@@ -235,26 +295,29 @@ class CenterHead(nn.Module):
 
     def forward(self, x, *kwargs):
         ret_dicts = []
-
         x = self.shared_conv(x)
 
         for task in self.tasks:
             ret_dicts.append(task(x))
-
-        return ret_dicts, x
+        return ret_dicts
 
     def _sigmoid(self, x):
         y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
         return y
 
-    def loss(self, example, preds_dicts, test_cfg, **kwargs):
+    def loss(self, example, preds_dicts, **kwargs):
         rets = []
         for task_id, preds_dict in enumerate(preds_dicts):
             # heatmap focal loss
             preds_dict['hm'] = self._sigmoid(preds_dict['hm'])
-
-            hm_loss = self.crit(preds_dict['hm'], example['hm'][task_id], example['ind'][task_id], example['mask'][task_id], example['cat'][task_id])
-
+            hm_loss = self.crit(
+                preds_dict['hm'], example['hm'][task_id],
+                example['ind'][task_id], example['mask'][task_id],
+                example['cat'][task_id])
+            if self.use_occluded:
+                occlusion_loss = self.crit_cls(
+                    preds_dict['occlusion'], example['num_points_per_gt'][task_id],
+                    example['ind'][task_id], example['mask'][task_id])
             target_box = example['anno_box'][task_id]
             # reconstruct the anno_box from multiple reg heads
             if self.dataset in ['waymo', 'nuscenes']:
@@ -276,9 +339,16 @@ class CenterHead(nn.Module):
             loc_loss = (box_loss*box_loss.new_tensor(self.code_weights)).sum()
 
             loss = hm_loss + self.weight*loc_loss
-
-            ret.update({'loss': loss, 'hm_loss': hm_loss.detach().cpu(), 'loc_loss':loc_loss, 'loc_loss_elem': box_loss.detach().cpu(), 'num_positive': example['mask'][task_id].float().sum()})
-
+            if self.use_occluded:
+                loss += self.weight_occlusion*occlusion_loss
+            ret.update({
+                'loss': loss,
+                'hm_loss': hm_loss.detach().cpu(),
+                'loc_loss': loc_loss,
+                'loc_loss_elem': box_loss.detach().cpu(),
+                'num_positive': example['mask'][task_id].float().sum()})
+            if self.use_occluded:
+                ret.update({'occlusion_loss': occlusion_loss.detach().cpu()})
             rets.append(ret)
         
         """convert batch-key to key-batch
@@ -414,16 +484,20 @@ class CenterHead(nn.Module):
                     batch_vel = batch_vel.mean(dim=1)
 
                 batch_vel = batch_vel.reshape(batch, H*W, 2)
-                batch_box_preds = torch.cat([xs, ys, batch_hei, batch_dim, batch_vel, batch_rot], dim=2)
-            else: 
-                batch_box_preds = torch.cat([xs, ys, batch_hei, batch_dim, batch_rot], dim=2)
-
+            else:
+                batch_vel = torch.zeros(batch, H*W, 2).to(xs.device)
+            batch_box_preds = torch.cat([xs, ys, batch_hei, batch_dim, batch_vel, batch_rot], dim=2)
+            if 'occlusion' in preds_dict:
+                batch_occlusion = torch.sigmoid(preds_dict['occlusion'])
+                batch_occlusion = batch_occlusion.reshape(batch, H*W, self.occlusion_level)
+            else:
+                batch_occlusion = torch.zeros(batch, H*W, 3).to(xs.device) # must set a number (> 0).
             metas.append(meta_list)
 
             if test_cfg.get('per_class_nms', False):
                 pass 
             else:
-                rets.append(self.post_processing(batch_box_preds, batch_hm, test_cfg, post_center_range, task_id)) 
+                rets.append(self.post_processing(batch_box_preds, batch_hm, batch_occlusion, test_cfg, post_center_range, task_id))
 
         # Merge branches results
         ret_list = []
@@ -441,6 +515,8 @@ class CenterHead(nn.Module):
                         rets[j][i][k] += flag
                         flag += num_class
                     ret[k] = torch.cat([ret[i][k] for ret in rets])
+                elif k in ["occlusion_preds"]:
+                    ret[k] = torch.cat([(ret[i][k] + 1) for ret in rets]) # start from 1
 
             ret['metadata'] = metas[0][i]
             ret_list.append(ret)
@@ -448,15 +524,16 @@ class CenterHead(nn.Module):
         return ret_list 
 
     @torch.no_grad()
-    def post_processing(self, batch_box_preds, batch_hm, test_cfg, post_center_range, task_id):
+    def post_processing(self, batch_box_preds, batch_hm, batch_occlusion, test_cfg, post_center_range, task_id):
         batch_size = len(batch_hm)
 
         prediction_dicts = []
         for i in range(batch_size):
             box_preds = batch_box_preds[i]
             hm_preds = batch_hm[i]
-
+            occlusion_preds = batch_occlusion[i]
             scores, labels = torch.max(hm_preds, dim=-1)
+            scores_occlusion, labels_occlusion = torch.max(occlusion_preds, dim=-1)
 
             score_mask = scores > test_cfg.score_threshold
             distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
@@ -467,7 +544,7 @@ class CenterHead(nn.Module):
             box_preds = box_preds[mask]
             scores = scores[mask]
             labels = labels[mask]
-
+            labels_occlusion = labels_occlusion[mask]
             boxes_for_nms = box_preds[:, [0, 1, 2, 3, 4, 5, -1]]
 
             if test_cfg.get('circular_nms', False):
@@ -483,11 +560,13 @@ class CenterHead(nn.Module):
             selected_boxes = box_preds[selected]
             selected_scores = scores[selected]
             selected_labels = labels[selected]
+            selected_occlusion = labels_occlusion[selected]
 
             prediction_dict = {
                 'box3d_lidar': selected_boxes,
                 'scores': selected_scores,
-                'label_preds': selected_labels
+                'label_preds': selected_labels,
+                'occlusion_preds': selected_occlusion,
             }
 
             prediction_dicts.append(prediction_dict)

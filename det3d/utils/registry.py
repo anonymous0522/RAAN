@@ -1,7 +1,7 @@
 import inspect
 
 from det3d import torchie
-
+import pdb
 
 class Registry(object):
     def __init__(self, name):
@@ -58,7 +58,7 @@ def build_from_cfg(cfg, registry, default_args=None):
     assert isinstance(cfg, dict) and "type" in cfg
     assert isinstance(default_args, dict) or default_args is None
     args = cfg.copy()
-    obj_type = args.pop("type")
+    obj_type = args.pop("type") # Voxelnet   NuScenesDataset
     if torchie.is_str(obj_type):
         obj_cls = registry.get(obj_type)
         if obj_cls is None:
@@ -74,5 +74,4 @@ def build_from_cfg(cfg, registry, default_args=None):
     if default_args is not None:
         for name, value in default_args.items():
             args.setdefault(name, value)
-
     return obj_cls(**args)

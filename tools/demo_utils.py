@@ -11,8 +11,9 @@ import cv2
 import numpy as np
 from matplotlib.axes import Axes
 from pyquaternion import Quaternion
-from matplotlib import pyplot as plt 
-
+from matplotlib import pyplot as plt
+import os
+import pdb
 
 def view_points(points: np.ndarray, view: np.ndarray, normalize: bool) -> np.ndarray:
     """
@@ -56,19 +57,35 @@ def _second_det_to_nusc_box(detection):
     box3d = detection["box3d_lidar"]
     scores = detection["scores"]
     labels = detection["label_preds"]
+    flag_occlusion = ("occlusion_preds" in detection)
+    if flag_occlusion:
+        occlusion = detection["occlusion_preds"]
+
     box3d[:, -1] = -box3d[:, -1] - np.pi / 2
     box_list = []
     for i in range(box3d.shape[0]):
         quat = Quaternion(axis=[0, 0, 1], radians=box3d[i, -1])
         velocity = (*box3d[i, 6:8], 0.0)
-        box = Box(
-            list(box3d[i, :3]),
-            list(box3d[i, 3:6]),
-            quat,
-            label=labels[i],
-            score=scores[i],
-            velocity=velocity,
-        )
+        if flag_occlusion:
+            box = Box(
+                list(box3d[i, :3]),
+                list(box3d[i, 3:6]),
+                quat,
+                label=labels[i],
+                score=scores[i],
+                velocity=velocity,
+                occlusion=occlusion[i],
+            )
+        else:
+            box = Box(
+                list(box3d[i, :3]),
+                list(box3d[i, 3:6]),
+                quat,
+                label=labels[i],
+                score=scores[i],
+                velocity=velocity,
+                occlusion=0,
+            )
         box_list.append(box)
     return box_list
 
@@ -83,6 +100,7 @@ class Box:
                  label: int = np.nan,
                  score: float = np.nan,
                  velocity: Tuple = (np.nan, np.nan, np.nan),
+                 occlusion: int = 0,
                  name: str = None,
                  token: str = None):
         """
@@ -101,7 +119,6 @@ class Box:
         assert len(center) == 3
         assert len(size) == 3
         assert type(orientation) == Quaternion
-
         self.center = np.array(center)
         self.wlh = np.array(size)
         self.orientation = orientation
@@ -110,6 +127,7 @@ class Box:
         self.velocity = np.array(velocity)
         self.name = name
         self.token = token
+        self.occlusion = int(occlusion)
 
     def __eq__(self, other):
         center = np.allclose(self.center, other.center)
@@ -194,7 +212,8 @@ class Box:
                view: np.ndarray = np.eye(3),
                normalize: bool = False,
                colors: Tuple = ('b', 'r', 'k'),
-               linewidth: float = 2) -> None:
+               linewidth: float = 2,
+               est = False) -> None:
         """
         Renders the box in the provided Matplotlib axis.
         :param axis: Axis onto which the box should be drawn.
@@ -228,6 +247,10 @@ class Box:
         axis.plot([center_bottom[0], center_bottom_forward[0]],
                   [center_bottom[1], center_bottom_forward[1]],
                   color=colors[0], linewidth=linewidth)
+        if est and (self.occlusion != 0):
+            # draw occlusion pred.
+            axis.text(center_bottom[0], center_bottom[1],
+                     str(self.occlusion), fontsize=10)
 
     def render_cv2(self,
                    im: np.ndarray,
@@ -281,7 +304,7 @@ class Box:
         return copy.deepcopy(self)
 
 
-def visual(points, gt_anno, det, i, eval_range=35, conf_th=0.5):
+def visual(points, gt_anno, det, i, eval_range=35, conf_th=0.4):
     _, ax = plt.subplots(1, 1, figsize=(9, 9), dpi=200)
     points = remove_close(points, radius=3)
     points = view_points(points[:3, :], np.eye(4), normalize=False)
@@ -300,13 +323,16 @@ def visual(points, gt_anno, det, i, eval_range=35, conf_th=0.5):
     # Show EST boxes.
     for box in boxes_est:
         if box.score >= conf_th:
-            box.render(ax, view=np.eye(4), colors=('b', 'b', 'b'), linewidth=1)
+            box.render(ax, view=np.eye(4), colors=('b', 'b', 'b'), linewidth=1, est=True)
 
 
     axes_limit = eval_range + 3  # Slightly bigger to include boxes that extend beyond the range.
     ax.set_xlim(-axes_limit, axes_limit)
     ax.set_ylim(-axes_limit, axes_limit)
     plt.axis('off')
+    image_folder = 'demo'
+    if not os.path.isdir(image_folder):
+        os.mkdir(image_folder)
 
     plt.savefig("demo/file%02d.png" % i)
     plt.close()

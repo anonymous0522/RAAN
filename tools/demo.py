@@ -52,7 +52,7 @@ def convert_box(info):
     return detection 
 
 def main():
-    cfg = Config.fromfile('configs/nusc/pp/nusc_centerpoint_pp_02voxel_two_pfn_10sweep_demo.py')
+    cfg = Config.fromfile('./configs/nusc/voxelnet/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z_car.py')
     
     model = build_detector(cfg.model, train_cfg=None, test_cfg=cfg.test_cfg)
 
@@ -68,7 +68,7 @@ def main():
         pin_memory=False,
     )
 
-    checkpoint = load_checkpoint(model, 'work_dirs/centerpoint_pillar_512_demo/latest.pth', map_location="cpu")
+    checkpoint = load_checkpoint(model, 'work_dirs/nusc_centerpoint_voxelnet_0075voxel_fix_bn_z_car/epoch_20.pth', map_location="cpu")
     model.eval()
 
     model = model.cuda()
@@ -99,16 +99,19 @@ def main():
         points_list.append(points.T)
     
     print('Done model inference. Please wait a minute, the matplotlib is a little slow...')
-    
+
     for i in range(len(points_list)):
         visual(points_list[i], gt_annos[i], detections[i], i)
         print("Rendered Image {}".format(i))
     
     image_folder = 'demo'
+    if not os.path.isdir(image_folder):
+        os.mkdir(image_folder)
+
     video_name = 'video.avi'
 
     images = [img for img in os.listdir(image_folder) if img.endswith(".png")]
-    images.sort(key=lambda img_name: int(img_name.split('.')[0][4:]))
+    images.sort()
     frame = cv2.imread(os.path.join(image_folder, images[0]))
     height, width, layers = frame.shape
 

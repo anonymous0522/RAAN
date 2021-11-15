@@ -6,10 +6,11 @@ from det3d.builder import build_dbsampler
 
 from det3d.core.input.voxel_generator import VoxelGenerator
 from det3d.core.utils.center_utils import (
-    draw_umich_gaussian, gaussian_radius
+    draw_umich_gaussian, gaussian_radius,
+    draw_umich_gaussian2D, gaussian_radius2D
 )
 from ..registry import PIPELINES
-
+import pdb
 
 def _dict_select(dict_, inds):
     for k, v in dict_.items():
@@ -29,7 +30,6 @@ class Preprocess(object):
     def __init__(self, cfg=None, **kwargs):
         self.shuffle_points = cfg.shuffle_points
         self.min_points_in_gt = cfg.get("min_points_in_gt", -1)
-        
         self.mode = cfg.mode
         if self.mode == "train":
             self.global_rotation_noise = cfg.global_rot_noise
@@ -42,7 +42,7 @@ class Preprocess(object):
                 self.db_sampler = None 
                 
             self.npoints = cfg.get("npoints", -1)
-
+        print("Min points thresh per gt is ==== ", self.min_points_in_gt)
         self.no_augmentation = cfg.get('no_augmentation', False)
 
     def __call__(self, res, info):
@@ -73,13 +73,6 @@ class Preprocess(object):
             )
 
             _dict_select(gt_dict, selected)
-
-            if self.min_points_in_gt > 0:
-                point_counts = box_np_ops.points_count_rbbox(
-                    points, gt_dict["gt_boxes"]
-                )
-                mask = point_counts >= min_points_in_gt
-                _dict_select(gt_dict, mask)
 
             gt_boxes_mask = np.array(
                 [n in self.class_names for n in gt_dict["gt_names"]], dtype=np.bool_
@@ -116,6 +109,13 @@ class Preprocess(object):
                     points = np.concatenate([sampled_points, points], axis=0)
 
             _dict_select(gt_dict, gt_boxes_mask)
+            # get points per box
+            point_counts = box_np_ops.points_count_rbbox(
+                points, gt_dict["gt_boxes"]
+            )
+            mask_num_points = point_counts >= self.min_points_in_gt
+            gt_dict["num_points_per_box"] = point_counts
+            _dict_select(gt_dict, mask_num_points)
 
             gt_classes = np.array(
                 [self.class_names.index(n) + 1 for n in gt_dict["gt_names"]],
@@ -147,7 +147,7 @@ class Preprocess(object):
             gt_dict["gt_classes"] = gt_classes
 
 
-        if self.shuffle_points:
+        if self.shuffle_points: # True
             np.random.shuffle(points)
 
         res["lidar"]["points"] = points
@@ -162,11 +162,11 @@ class Preprocess(object):
 class Voxelization(object):
     def __init__(self, **kwargs):
         cfg = kwargs.get("cfg", None)
+        # for nuscenes, [-54, -54, -5.0, 54, 54, 3.0]
         self.range = cfg.range
         self.voxel_size = cfg.voxel_size
         self.max_points_in_voxel = cfg.max_points_in_voxel
         self.max_voxel_num = [cfg.max_voxel_num, cfg.max_voxel_num] if isinstance(cfg.max_voxel_num, int) else cfg.max_voxel_num
-
         self.double_flip = cfg.get('double_flip', False)
 
         self.voxel_generator = VoxelGenerator(
@@ -191,7 +191,6 @@ class Voxelization(object):
             max_voxels = self.max_voxel_num[0]
         else:
             max_voxels = self.max_voxel_num[1]
-
         voxels, coordinates, num_points = self.voxel_generator.generate(
             res["lidar"]["points"], max_voxels=max_voxels 
         )
@@ -253,7 +252,7 @@ class Voxelization(object):
                 shape=grid_size,
                 range=pc_range,
                 size=voxel_size
-            )            
+            )
 
         return res, info
 
@@ -280,31 +279,24 @@ class AssignLabel(object):
         self.gaussian_overlap = assigner_cfg.gaussian_overlap
         self._max_objs = assigner_cfg.max_objs
         self._min_radius = assigner_cfg.min_radius
-        self.cfg = assigner_cfg
+        self._use_rot_gaussian = assigner_cfg.use_rot_gaussian
+        self._thresh_num_points = assigner_cfg.num_points_thresholds
+        print("_use_rot_gaussian === ", self._use_rot_gaussian)
 
     def __call__(self, res, info):
         max_objs = self._max_objs
         class_names_by_task = [t.class_names for t in self.tasks]
         num_classes_by_task = [t.num_class for t in self.tasks]
 
+        # Calculate output featuremap size
+        grid_size = res["lidar"]["voxels"]["shape"] 
+        pc_range = res["lidar"]["voxels"]["range"]
+        voxel_size = res["lidar"]["voxels"]["size"]
+
+        feature_map_size = grid_size[:2] // self.out_size_factor
         example = {}
 
         if res["mode"] == "train":
-            # Calculate output featuremap size
-            if 'voxels' in res['lidar']:
-                # Calculate output featuremap size
-                grid_size = res["lidar"]["voxels"]["shape"] 
-                pc_range = res["lidar"]["voxels"]["range"]
-                voxel_size = res["lidar"]["voxels"]["size"]
-                feature_map_size = grid_size[:2] // self.out_size_factor
-            else:
-                pc_range = np.array(self.cfg['pc_range'], dtype=np.float32)
-                voxel_size = np.array(self.cfg['voxel_size'], dtype=np.float32)
-                grid_size = (pc_range[3:] - pc_range[:3]) / voxel_size
-                grid_size = np.round(grid_size).astype(np.int64)
-
-            feature_map_size = grid_size[:2] // self.out_size_factor
-
             gt_dict = res["lidar"]["annotations"]
 
             # reorganize the gt_dict by tasks
@@ -324,18 +316,22 @@ class AssignLabel(object):
             task_boxes = []
             task_classes = []
             task_names = []
+            task_num_points_all_box = []
             flag2 = 0
             for idx, mask in enumerate(task_masks):
                 task_box = []
                 task_class = []
                 task_name = []
+                task_num_points_per_box = []
                 for m in mask:
                     task_box.append(gt_dict["gt_boxes"][m])
                     task_class.append(gt_dict["gt_classes"][m] - flag2)
                     task_name.append(gt_dict["gt_names"][m])
+                    task_num_points_per_box.append(gt_dict["num_points_per_box"][m])
                 task_boxes.append(np.concatenate(task_box, axis=0))
                 task_classes.append(np.concatenate(task_class))
                 task_names.append(np.concatenate(task_name))
+                task_num_points_all_box.append(np.concatenate(task_num_points_per_box))
                 flag2 += len(mask)
 
             for task_box in task_boxes:
@@ -348,14 +344,16 @@ class AssignLabel(object):
             gt_dict["gt_classes"] = task_classes
             gt_dict["gt_names"] = task_names
             gt_dict["gt_boxes"] = task_boxes
-
+            gt_dict["num_points_per_box"] = task_num_points_all_box
             res["lidar"]["annotations"] = gt_dict
 
-            draw_gaussian = draw_umich_gaussian
+            draw_gaussian = draw_umich_gaussian2D if self._use_rot_gaussian \
+                else draw_umich_gaussian
 
-            hms, anno_boxs, inds, masks, cats = [], [], [], [], []
+            hms, anno_boxs, inds, masks, cats, num_points_gts = [], [], [], [], [], []
 
             for idx, task in enumerate(self.tasks):
+                # for each header, hm will has channel_num same with num_class in current task.
                 hm = np.zeros((len(class_names_by_task[idx]), feature_map_size[1], feature_map_size[0]),
                               dtype=np.float32)
 
@@ -370,18 +368,30 @@ class AssignLabel(object):
                 ind = np.zeros((max_objs), dtype=np.int64)
                 mask = np.zeros((max_objs), dtype=np.uint8)
                 cat = np.zeros((max_objs), dtype=np.int64)
+                num_points_gt = np.zeros((max_objs), dtype=np.int64)
 
                 num_objs = min(gt_dict['gt_boxes'][idx].shape[0], max_objs)  
-
                 for k in range(num_objs):
+                    # start from 0.
                     cls_id = gt_dict['gt_classes'][idx][k] - 1
-
+                    cls_name = gt_dict['gt_names'][idx][k]
+                    if isinstance(self._min_radius, dict):
+                        temp_min_radius = self._min_radius[cls_name][0]
+                        gaussian_sigma_decay = self._min_radius[cls_name][1]
+                    else:
+                        temp_min_radius = self._min_radius
+                        gaussian_sigma_decay = None
                     w, l, h = gt_dict['gt_boxes'][idx][k][3], gt_dict['gt_boxes'][idx][k][4], \
                               gt_dict['gt_boxes'][idx][k][5]
                     w, l = w / voxel_size[0] / self.out_size_factor, l / voxel_size[1] / self.out_size_factor
                     if w > 0 and l > 0:
-                        radius = gaussian_radius((l, w), min_overlap=self.gaussian_overlap)
-                        radius = max(self._min_radius, int(radius))
+                        if self._use_rot_gaussian:
+                            radius = gaussian_radius2D((l, w))
+                            for temp_key, temp_value in radius.items():
+                                radius[temp_key] = max(temp_min_radius, int(temp_value))
+                        else:
+                            radius = gaussian_radius((l, w), min_overlap=self.gaussian_overlap)
+                            radius = max(temp_min_radius, int(radius))
 
                         # be really careful for the coordinate system of your box annotation. 
                         x, y, z = gt_dict['gt_boxes'][idx][k][0], gt_dict['gt_boxes'][idx][k][1], \
@@ -398,27 +408,52 @@ class AssignLabel(object):
                         if not (0 <= ct_int[0] < feature_map_size[0] and 0 <= ct_int[1] < feature_map_size[1]):
                             continue 
 
-                        draw_gaussian(hm[cls_id], ct, radius)
+                        rot = gt_dict['gt_boxes'][idx][k][8] if res['type'] == 'NuScenesDataset' \
+                            else gt_dict['gt_boxes'][idx][k][-1]
+                        if gaussian_sigma_decay != None:
+                            draw_gaussian(hm[cls_id], ct, radius, rotate=rot, sigma_decay=gaussian_sigma_decay)
+                        else:
+                            draw_gaussian(hm[cls_id], ct, radius, rotate=rot)
+                        num_points_per_box = gt_dict['num_points_per_box'][idx][k]
 
                         new_idx = k
                         x, y = ct_int[0], ct_int[1]
-
+                        # for each task, each class for each gt
                         cat[new_idx] = cls_id
+                        # for each task, each feature map index for each gt
                         ind[new_idx] = y * feature_map_size[0] + x
                         mask[new_idx] = 1
 
-                        if res['type'] == 'NuScenesDataset': 
+                        # generate label for num_points_per_box.
+                        label = 0
+                        if isinstance(self._thresh_num_points, list) or isinstance(self._thresh_num_points, tuple):
+                            temp_thresh_num_points = self._thresh_num_points
+                        elif isinstance(self._thresh_num_points, dict):
+                            temp_thresh_num_points = self._thresh_num_points[cls_name]
+                        else:
+                            raise ValueError("Unsupported type for |num_points_thresholds|")
+
+                        for i in range(len(temp_thresh_num_points)):
+                            if num_points_per_box <= temp_thresh_num_points[i]:
+                                label = i + 1
+                                break
+                            if num_points_per_box > temp_thresh_num_points[-1]:
+                                label = len(temp_thresh_num_points) + 1
+                        num_points_gt[new_idx] = label # give label
+                        # num_points_gt[new_idx] = num_points_per_box # original num points
+
+                        if res['type'] == 'NuScenesDataset':
                             vx, vy = gt_dict['gt_boxes'][idx][k][6:8]
-                            rot = gt_dict['gt_boxes'][idx][k][8]
+                            #rot = gt_dict['gt_boxes'][idx][k][8]
                             anno_box[new_idx] = np.concatenate(
                                 (ct - (x, y), z, np.log(gt_dict['gt_boxes'][idx][k][3:6]),
                                 np.array(vx), np.array(vy), np.sin(rot), np.cos(rot)), axis=None)
                         elif res['type'] == 'WaymoDataset':
                             vx, vy = gt_dict['gt_boxes'][idx][k][6:8]
-                            rot = gt_dict['gt_boxes'][idx][k][-1]
+                            #rot = gt_dict['gt_boxes'][idx][k][-1]
                             anno_box[new_idx] = np.concatenate(
-                            (ct - (x, y), z, np.log(gt_dict['gt_boxes'][idx][k][3:6]),
-                            np.array(vx), np.array(vy), np.sin(rot), np.cos(rot)), axis=None)
+                                (ct - (x, y), z, np.log(gt_dict['gt_boxes'][idx][k][3:6]),
+                                np.array(vx), np.array(vy), np.sin(rot), np.cos(rot)), axis=None)
                         else:
                             raise NotImplementedError("Only Support Waymo and nuScene for Now")
 
@@ -427,8 +462,8 @@ class AssignLabel(object):
                 masks.append(mask)
                 inds.append(ind)
                 cats.append(cat)
-
-            # used for two stage code 
+                num_points_gts.append(num_points_gt)
+            # used for two stage code
             boxes = flatten(gt_dict['gt_boxes'])
             classes = merge_multi_group_label(gt_dict['gt_classes'], num_classes_by_task)
 
@@ -448,12 +483,12 @@ class AssignLabel(object):
             gt_boxes_and_cls[:num_obj] = boxes_and_cls
 
             example.update({'gt_boxes_and_cls': gt_boxes_and_cls})
-
-            example.update({'hm': hms, 'anno_box': anno_boxs, 'ind': inds, 'mask': masks, 'cat': cats})
+            example.update({
+                'hm': hms, 'anno_box': anno_boxs, 'ind': inds, 'mask': masks, 'cat': cats,
+                'num_points_per_gt': num_points_gts})
         else:
             pass
 
         res["lidar"]["targets"] = example
-
         return res, info
 

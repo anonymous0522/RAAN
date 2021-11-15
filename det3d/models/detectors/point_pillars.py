@@ -46,7 +46,7 @@ class PointPillars(SingleStageDetector):
         )
 
         x = self.extract_feat(data)
-        preds, _ = self.bbox_head(x)
+        preds = self.bbox_head(x)
 
         if return_loss:
             return self.bbox_head.loss(example, preds)
@@ -71,7 +71,7 @@ class PointPillars(SingleStageDetector):
 
         x = self.extract_feat(data)
         bev_feature = x 
-        preds, _ = self.bbox_head(x)
+        preds = self.bbox_head(x)
 
         # manual deepcopy ...
         new_preds = []

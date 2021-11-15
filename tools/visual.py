@@ -61,7 +61,6 @@ if __name__ == '__main__':
         detections = data['detections']
 
         pcd = o3d.geometry.PointCloud()
-        pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
 
         visual = [pcd]

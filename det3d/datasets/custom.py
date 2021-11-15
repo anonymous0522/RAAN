@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 from .registry import DATASETS
 from .pipelines import Compose
-
+import pdb
 
 @DATASETS.register_module
 class PointCloudDataset(Dataset):
@@ -35,11 +35,10 @@ class PointCloudDataset(Dataset):
         self.test_mode = test_mode
 
         self._set_group_flag()
-
         if pipeline is None:
             self.pipeline = None
         else:
-            self.pipeline = Compose(pipeline)
+            self.pipeline = Compose(pipeline) # will compose all sub config like pointcloud preprocess, assign...
 
     def __getitem__(self, index):
         """This function is used for preprocess.

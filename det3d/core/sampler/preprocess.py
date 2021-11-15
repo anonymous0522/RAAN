@@ -14,7 +14,7 @@ from det3d.core.bbox.geometry import (
     points_in_convex_polygon_jit,
 )
 import copy
-
+import pdb
 
 class BatchSampler:
     def __init__(
@@ -955,7 +955,6 @@ def global_translate_(gt_boxes, points, noise_translate_std):
             np.random.normal(0, noise_translate_std[0], 1),
         ]
     ).T
-
     points[:, :3] += noise_translate
     gt_boxes[:, :3] += noise_translate
 

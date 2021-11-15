@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import sys
-
+import pdb
 try:
     import apex
 except:
@@ -197,7 +197,6 @@ def main():
         os.makedirs(args.work_dir)
 
     save_pred(predictions, args.work_dir)
-
     result_dict, _ = dataset.evaluation(copy.deepcopy(predictions), output_dir=args.work_dir, testset=args.testset)
 
     if result_dict is not None:

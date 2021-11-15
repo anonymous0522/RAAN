@@ -19,48 +19,83 @@ target_assigner = dict(
     tasks=tasks,
 )
 
-
 # model settings
 model = dict(
-    type="PointPillars",
+    type="VoxelNet",
     pretrained=None,
     reader=dict(
-        type="PillarFeatureNet",
-        num_filters=[64, 64],
+        type="VoxelFeatureExtractorV3",
+        # type='SimpleVoxel',
         num_input_features=5,
-        with_distance=False,
-        voxel_size=(0.2, 0.2, 8),
-        pc_range=(-51.2, -51.2, -5.0, 51.2, 51.2, 3.0),
     ),
-    backbone=dict(type="PointPillarsScatter", ds_factor=1),
+    backbone=dict(
+        type="SpMiddleResNetFHD", num_input_features=5, ds_factor=8
+    ),
     neck=dict(
         type="RPN",
-        layer_nums=[3, 5, 5],
-        ds_layer_strides=[2, 2, 2],
-        ds_num_filters=[64, 128, 256],
-        us_layer_strides=[0.5, 1, 2],
-        us_num_filters=[128, 128, 128],
-        num_input_features=64,
+        layer_nums=[5, 5],
+        ds_layer_strides=[1, 2],
+        ds_num_filters=[128, 256],
+        us_layer_strides=[1, 2],
+        us_num_filters=[256, 256],
+        num_input_features=256,
         logger=logging.getLogger("RPN"),
+        conv_attention_flag=True,
+        deconv_attention_flag=True,
     ),
     bbox_head=dict(
-        # type='RPNHead',
         type="CenterHead",
-        in_channels=sum([128, 128, 128]),
+        in_channels=sum([256, 256]),
         tasks=tasks,
         dataset='nuscenes',
         weight=0.25,
-        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 1.0, 1.0],
-        common_heads={'reg': (2, 2), 'height': (1, 2), 'dim':(3, 2), 'rot':(2, 2), 'vel': (2, 2)}, # (output_channel, num_conv)
+        # reg height dim (vel) rot
+        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], # 0.2, 0.2
+        common_heads={'reg': (2, 2), 'height': (1, 2), 'dim':(3, 2), 'rot':(2, 2)}, # 'vel': (2, 2)
+        share_conv_channel=64,
+        dcn_head=False,
+        attention_flag=True,
+        # 1, 2, 3 (occluded, partial occluded, less occluded) should be set as 3.
+        # if < 2, no occlusion cls header, like -1.
+        occlusion_level=-1, # 3
+        weight_occlusion=0.2,
     ),
 )
 
 assigner = dict(
     target_assigner=target_assigner,
     out_size_factor=get_downsample_factor(model),
+    dense_reg=1,
     gaussian_overlap=0.1,
     max_objs=500,
-    min_radius=2,
+    min_radius={      
+        "car" : (0, 3.0), # (radius, sigma_decay)
+        "truck" : (0, 3.0),
+        "bus" : (0, 3.0),
+        "trailer" : (0, 3.0),
+        "construction_vehicle" : (0, 3.0),
+        "traffic_cone" : (2, 6.0),
+        "barrier" : (2, 6.0),
+        "motorcycle" : (2, 6.0),
+        "bicycle" : (2, 6.0),
+        "pedestrian" : (2, 6.0),
+    }, # for small object, we need use 2, for car we use 0
+    use_rot_gaussian=True,
+    # for occlusion level, (0 - 150), (150 - 800), (800+)
+    num_points_thresholds=(150, 800),
+    ## occlusion level for different classes
+    # num_points_thresholds={      
+    #     "car" : (150, 800), # (radius, sigma_decay)
+    #     "truck" : (150, 200),
+    #     "bus" : (150, 250),
+    #     "trailer" : (150, 300),
+    #     "construction_vehicle" : (150, 350),
+    #     "traffic_cone" : (150, 400),
+    #     "barrier" : (150, 450),
+    #     "motorcycle" : (150, 500),
+    #     "bicycle" : (150, 550),
+    #     "pedestrian" : (150, 600),
+    # },
 )
 
 
@@ -70,14 +105,16 @@ test_cfg = dict(
     post_center_limit_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
     max_per_img=500,
     nms=dict(
+        use_rotate_nms=True,
+        use_multi_class_nms=False,
         nms_pre_max_size=1000,
         nms_post_max_size=83,
         nms_iou_threshold=0.2,
     ),
     score_threshold=0.1,
-    pc_range=[-51.2, -51.2],
+    pc_range=[-54, -54],
     out_size_factor=get_downsample_factor(model),
-    voxel_size=[0.2, 0.2]
+    voxel_size=[0.075, 0.075]
 )
 
 # dataset settings
@@ -85,6 +122,8 @@ dataset_type = "NuScenesDataset"
 nsweeps = 10
 data_root = "data/nuScenes"
 
+
+# db_sampler = None
 db_sampler = dict(
     type="GT-AUG",
     enable=False,
@@ -121,13 +160,16 @@ db_sampler = dict(
     global_random_rotation_range_per_object=[0, 0],
     rate=1.0,
 )
+
 train_preprocessor = dict(
     mode="train",
     shuffle_points=True,
-    global_rot_noise=[-0.3925, 0.3925],
-    global_scale_noise=[0.95, 1.05],
+    global_rot_noise=[-0.78539816, 0.78539816],
+    global_scale_noise=[0.9, 1.1],
+    global_translate_std=0.5,
     db_sampler=db_sampler,
     class_names=class_names,
+    min_points_in_gt=0,
 )
 
 val_preprocessor = dict(
@@ -136,10 +178,10 @@ val_preprocessor = dict(
 )
 
 voxel_generator = dict(
-    range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
-    voxel_size=[0.2, 0.2, 8],
-    max_points_in_voxel=20,
-    max_voxel_num=[30000, 60000],
+    range=[-54, -54, -5.0, 54, 54, 3.0],
+    voxel_size=[0.075, 0.075, 0.2],
+    max_points_in_voxel=10,
+    max_voxel_num=[120000, 160000],
 )
 
 train_pipeline = [
@@ -149,6 +191,7 @@ train_pipeline = [
     dict(type="Voxelization", cfg=voxel_generator),
     dict(type="AssignLabel", cfg=train_cfg["assigner"]),
     dict(type="Reformat"),
+    # dict(type='PointCloudCollect', keys=['points', 'voxels', 'annotations', 'calib']),
 ]
 test_pipeline = [
     dict(type="LoadPointCloudFromFile", dataset=dataset_type),
@@ -161,16 +204,29 @@ test_pipeline = [
 
 train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
 val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
-test_anno = None
+test_anno = "data/nuScenes/v1.0-test/infos_test_10sweeps_withvelo.pkl"
+
+tv_anno = [train_anno, val_anno]
+# Merge Flag of two datasets.
+tv_merge = True
 
 data = dict(
-    samples_per_gpu=4,
-    workers_per_gpu=8,
+    samples_per_gpu=4, # batch size
+    workers_per_gpu=6,
     train=dict(
         type=dataset_type,
         root_path=data_root,
         info_path=train_anno,
         ann_file=train_anno,
+        nsweeps=nsweeps,
+        class_names=class_names,
+        pipeline=train_pipeline,
+    ),
+    tv_train=dict(
+        type=dataset_type,
+        root_path=data_root,
+        info_path=tv_anno,
+        ann_file=tv_anno,
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=train_pipeline,
@@ -187,14 +243,17 @@ data = dict(
     ),
     test=dict(
         type=dataset_type,
-        root_path=data_root,
+        root_path=data_root + "/v1.0-test",
         info_path=test_anno,
-        ann_file=test_anno,
+        test_mode=True,
+        ann_file=data_root + "/v1.0-test",
         nsweeps=nsweeps,
         class_names=class_names,
         pipeline=test_pipeline,
+        version='v1.0-test'
     ),
 )
+
 
 
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
@@ -224,4 +283,4 @@ log_level = "INFO"
 work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = None
 resume_from = None 
-workflow = [('train', 1)]
+workflow = [('train', 1), ('val', 1)]

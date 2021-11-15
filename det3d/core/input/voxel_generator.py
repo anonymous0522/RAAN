@@ -1,6 +1,6 @@
 import numpy as np
 from det3d.ops.point_cloud.point_cloud_ops import points_to_voxel
-
+import pdb
 
 class VoxelGenerator:
     def __init__(self, voxel_size, point_cloud_range, max_num_points, max_voxels=20000):
@@ -19,7 +19,6 @@ class VoxelGenerator:
     def generate(self, points, max_voxels=-1):
         if max_voxels == -1:
             max_voxels=self._max_voxels
-
         return points_to_voxel(
             points,
             self._voxel_size,

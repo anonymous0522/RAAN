@@ -8,7 +8,7 @@ import numpy as np
 from det3d.core.bbox import box_np_ops
 from det3d.core.sampler import preprocess as prep
 from det3d.utils.check import shape_mergeable
-
+import pdb
 
 class DataBaseSamplerV2:
     def __init__(
