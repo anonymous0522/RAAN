@@ -17,6 +17,7 @@ powerful BEV features and generates superior 3D object detections. The range-awa
 'torch==1.1.0',
 'CUDNN==7.5.0'
 ~~~
+**Warning:** We tried CUDA11.0+Torch1.7.1 on RTX3090, the AP performance is significantly lower than the aforementioned environment setup. 
 
 1. Installation
 ~~~
