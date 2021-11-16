@@ -61,6 +61,6 @@ python -m torch.distributed.launch —nproc_per_node=NUM_OF_GPU tools/dist_test.
 
 ## Main Results
 
-### Object detection on VOC and COCO
+### 3D Object detection on nuScenes
 
 <img src="https://github.com/anonymous0522/RAAN/blob/master/docs/result_table.PNG" width="100%" height="100%">
