@@ -1,5 +1,7 @@
 # RAANet: Range-Aware Attention Network for LiDAR-based 3D Object Detection with Auxiliary Density Level Estimation
 
+### Arxiv link: [https://arxiv.org/abs/2111.09515](https://arxiv.org/abs/2111.09515)
+
 ## Anonymous submission
 
 ## Abstract
