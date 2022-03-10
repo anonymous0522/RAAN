@@ -17,6 +17,7 @@ from det3d.models.utils import change_default_args
 from .. import builder
 from ..registry import NECKS
 from ..utils import build_norm_layer
+
 # attention_conv2d
 from biattention_conv2d_concat_initW import AttentionConv2D, AttentionConvTranspose2D
 

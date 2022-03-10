@@ -1,5 +1,4 @@
-numba                                                                                                     
-matplotlib                                                                                                
+numba                                                                                                                                                                                                     
 fire                                                                                                      
 protobuf                                                                                                  
 opencv-python                                                                                             

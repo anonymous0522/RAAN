@@ -560,30 +560,6 @@ class Trainer(object):
 
                 mean_ap = sum(mean_APs.values()) / len(mean_APs)
                 self.writer.add_scalar('MeanAP', mean_ap, global_step)
-                '''
-                # add tensorboard image for attention and heatmap.
-                if self._world_size > 1:
-                    model = self.model.module
-                else: model = self.model
-                if hasattr(model.bbox_head.tasks[0], 'hm_attention'):
-                    hm_attention_a, hm_attention_b = model.bbox_head.tasks[0].hm_attention
-                    # heatmap = model.bbox_head.tasks[0].heatmap
-                    img_attention_a = hm_attention_a[0][0].detach().cpu().numpy() * 255
-                    img_attention_b = hm_attention_b[0][0].detach().cpu().numpy() * 255
-
-                    # img_heatmap = heatmap[0][0].detach().cpu().numpy() * 255
-                    fig1 = plt.figure()
-                    ax1 = fig1.add_subplot(1, 1, 1)
-                    ax1.imshow(img_attention_a, cmap=plt.cm.gray)
-                    fig2 = plt.figure()
-                    ax2 = fig2.add_subplot(1, 1, 1)
-                    ax2.imshow(img_attention_b, cmap=plt.cm.gray)
-                    #fig2 = plt.figure()
-                    #ax2 = fig2.add_subplot(1, 1, 1)
-                    #ax2.imshow(img_heatmap, cmap=plt.cm.gray)
-                    self.writer.add_figure("attention_a", fig1, global_step)
-                    self.writer.add_figure("attention_b", fig2, global_step)
-                '''
 
     def register_lr_hooks(self, lr_config):
         if isinstance(lr_config, LrUpdaterHook):

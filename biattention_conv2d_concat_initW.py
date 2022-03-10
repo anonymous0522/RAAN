@@ -33,10 +33,12 @@ from det3d.models.utils import build_norm_layer
 from det3d.models.utils import Sequential
 from det3d.models.utils import Scale
 
+
 _ENCODED_FEATURES_NUM = 3 # x, y, r
 _CONV_ATT_COMBINE = True
 is_norm = True
 scale_val = 1.0
+
 
 def _linear_map(x, range=[-1.0, 1.0]):
     span = range[1] - range[0]

@@ -3,6 +3,7 @@ import logging
 
 from det3d.utils.config_tool import get_downsample_factor
 
+
 tasks = [
     dict(num_class=1, class_names=["car"]),
     dict(num_class=2, class_names=["truck", "construction_vehicle"]),
