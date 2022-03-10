@@ -3,6 +3,9 @@ import open3d as o3d
 import argparse
 import pickle 
 
+import pdb
+
+
 def label2color(label):
     colors = [[204/255, 0, 0], [52/255, 101/255, 164/255],
     [245/255, 121/255, 0], [115/255, 210/255, 22/255]]
