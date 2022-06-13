@@ -1,11 +1,5 @@
 # RAANet: Range-Aware Attention Network for LiDAR-based 3D Object Detection with Auxiliary Density Level Estimation
 
-## Anonymous submission
-
-## Abstract
-
-3D object detection from LiDAR data for autonomous driving has been making remarkable strides in recent years. Among the state-of-the-art methodologies, encoding point clouds into a bird's-eye view (BEV) has been demonstrated to be both effective and efficient. Different from perspective views, BEV preserves rich spatial and distance information between objects; and while farther objects of the same type do not appear smaller in the BEV, they contain sparser point cloud features. This fact weakens BEV feature extraction using shared-weight convolutional neural networks. In order to address this challenge, we propose Range-Aware Attention Network (RAANet), which extracts more powerful BEV features and generates superior 3D object detections. The range-aware attention (RAA) convolutions significantly improve feature extraction for near as well as far objects. Moreover, we propose a novel auxiliary loss for density estimation to further enhance the detection accuracy of RAANet for occluded objects. It is worth to note that our proposed RAA convolution is lightweight and compatible to be integrated into any CNN architecture used for the BEV detection. Extensive experiments on the nuScenes dataset demonstrate that our proposed approach outperforms the state-of-the-art methods for LiDAR-based 3D object detection, with real-time inference speed of 16 Hz for the full version and 22 Hz for the lite version. The code is publicly available at an anonymous Github repository https://github.com/anonymous0522/RAAN.
-
 <img src="https://github.com/anonymous0522/RAAN/blob/master/docs/motivation.PNG" width="100%" height="100%">
 
 ## Installation
@@ -58,8 +52,3 @@ With distributed val:
 python -m torch.distributed.launch —nproc_per_node=NUM_OF_GPU tools/dist_test.py PATH_TO_CONFIG —work_dir TPATH_TO_WORK_DIR --checkpoint PATH_TO_MODEL --testset —speed_test
 ~~~
 
-## Main Results
-
-### 3D Object detection on nuScenes
-
-<img src="https://github.com/anonymous0522/RAAN/blob/master/docs/result_table.PNG" width="100%" height="100%">
