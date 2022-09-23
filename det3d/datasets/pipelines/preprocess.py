@@ -407,7 +407,11 @@ class AssignLabel(object):
                         # throw out not in range objects to avoid out of array area when creating the heatmap
                         if not (0 <= ct_int[0] < feature_map_size[0] and 0 <= ct_int[1] < feature_map_size[1]):
                             continue 
-
+                            
+                        # We leverage the last value in |gt_dict| (gt_dict['gt_boxes'][idx][k][8]) to obtain
+                        # bbox rotation information in BEV due to the data accessing feasibility. The
+                        # relationship between |rot| and |yaw| is yaw = -rot-pi/2.
+                        # *** We thank Yurui Chen's reminder. ***
                         rot = gt_dict['gt_boxes'][idx][k][8] if res['type'] == 'NuScenesDataset' \
                             else gt_dict['gt_boxes'][idx][k][-1]
                         if gaussian_sigma_decay != None:
